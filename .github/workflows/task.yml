@@ -40,6 +40,18 @@ on:
         description: '打印收藏夹的全部内容'
         type: boolean
         default: false
+      PICA_DL_RECENT_HOURS:
+        description: '只保留最近 N 小时内更新的漫画（留空=不限制）'
+        type: string
+        default: '48'
+      PICA_DL_EXCLUDE_CATEGORIES:
+        description: '排除的分区，逗号分隔'
+        type: string
+        default: '生肉'
+      PICA_DL_DROP_RAW:
+        description: '过滤生肉（无汉化组/日文标题）'
+        type: boolean
+        default: true
       DEBUG:
         description: '调试模式'
         type: boolean
@@ -56,6 +68,9 @@ env:
   PICA_DL_SEARCH_KEYWORDS: ${{ inputs.PICA_DL_SEARCH_KEYWORDS }}
   PICA_DL_CHAPTER: ${{ inputs.PICA_DL_CHAPTER }}
   PICA_DL_FAV_PAGE: ${{ inputs.PICA_DL_FAV_PAGE }}
+  PICA_DL_RECENT_HOURS: ${{ inputs.PICA_DL_RECENT_HOURS }}
+  PICA_DL_EXCLUDE_CATEGORIES: ${{ inputs.PICA_DL_EXCLUDE_CATEGORIES }}
+  PICA_DL_DROP_RAW: ${{ inputs.PICA_DL_DROP_RAW && 'true' || 'false' }}
 
 jobs:
   download:
