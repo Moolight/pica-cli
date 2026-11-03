@@ -49,6 +49,14 @@ function parseList(name: string): string[] {
         .filter(Boolean)
 }
 
+function parseLimit(): number {
+    const raw = process.env.PICA_DL_LIMIT?.trim()
+    if (!raw) return 0
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return 0
+    return Math.floor(n)
+}
+
 function isWithinHours(updatedAt: string, hours: number): boolean {
     const t = Date.parse(updatedAt)
     if (!Number.isFinite(t)) return false
@@ -65,6 +73,15 @@ function hitExclude(comic: Comic, exclude: string[]): boolean {
     return exclude.some((e) => fields.includes(e.toLowerCase()))
 }
 
+/** 只保留命中指定分类的漫画（空数组=不限制） */
+function hitInclude(comic: Comic, include: string[]): boolean {
+    if (include.length === 0) return true
+    const fields = [...(comic.categories || []), ...(comic.tags || [])]
+        .join('|')
+        .toLowerCase()
+    return include.some((e) => fields.includes(e.toLowerCase()))
+}
+
 function isRaw(comic: Comic): boolean {
     const fields = [
         comic.title || '',
@@ -79,35 +96,45 @@ function isRaw(comic: Comic): boolean {
 }
 
 /**
- * 带时间窗的搜索：用 dd（新到旧）排序，遇到整页都超出时间窗就停
+ * 按更新时间倒序搜索：可同时受「时间窗」和「数量」限制
+ * hours 为 null 时不做时间过滤；limit > 0 时凑够就停
  */
 async function searchRecent(
     pica: Pica,
     keyword: string,
-    hours: number,
-    exclude: string[]
+    hours: number | null,
+    exclude: string[],
+    include: string[],
+    dropRaw: boolean,
+    limit: number
 ): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number }> {
     const kept: Comic[] = []
     let droppedRaw = 0
     let droppedCat = 0
     let scanned = 0
-    const maxPage = 20
+    const maxPage = 30
     for (let page = 1; page <= maxPage; page++) {
         const res = await pica.search(keyword, page, pica.Order.latest)
         if (!res.docs || res.docs.length === 0) break
         let freshOnPage = 0
         for (const c of res.docs) {
-            if (!isWithinHours(c.updated_at, hours)) continue
+            if (hours !== null && !isWithinHours(c.updated_at, hours)) continue
             freshOnPage++
             scanned++
             if (hitExclude(c, exclude)) {
                 droppedCat++
                 continue
             }
+            if (dropRaw && isRaw(c)) {
+                droppedRaw++
+                continue
+            }
+            if (!hitInclude(c, include)) continue
             kept.push(c)
         }
-        if (freshOnPage === 0) break
-        if (freshOnPage < res.docs.length) break
+        if (hours !== null && freshOnPage === 0) break
+        if (hours !== null && freshOnPage < res.docs.length) break
+        if (limit > 0 && kept.length >= limit) break
         if (page >= res.pages) break
     }
     return { kept, droppedRaw, droppedCat, scanned }
@@ -128,6 +155,8 @@ async function main() {
 
     const recentHours = parseRecentHours()
     const excludeCategories = parseList('PICA_DL_EXCLUDE_CATEGORIES')
+    const includeCategories = parseList('PICA_DL_INCLUDE_CATEGORIES')
+    const limit = parseLimit()
     const dropRaw = process.env.PICA_DL_DROP_RAW !== 'false'
 
     const account =
@@ -156,6 +185,12 @@ async function main() {
     }
     if (dropRaw) {
         log.info(`生肉过滤：${pico.cyan('已开启')}`)
+    }
+    if (includeCategories.length > 0) {
+        log.info(`分类限定：${pico.cyan(includeCategories.join(', '))}`)
+    }
+    if (limit > 0) {
+        log.info(`数量上限：${pico.cyan(limit + ' 部')}（过滤后按更新时间取最新的）`)
     }
 
     const answer =
@@ -240,11 +275,22 @@ async function main() {
         // 根据关键字查询
         const keywords = inputKeys.filter((k: string) => !isValidComicId(k))
 
-        if (recentHours !== null) {
+        if (recentHours !== null || limit > 0 || includeCategories.length > 0) {
             const seen = new Set<string>()
+            const scopeDesc =
+                recentHours !== null ? `近 ${recentHours} 小时` : limit > 0 ? `最新 ${limit} 部` : '全部'
             for (const keyword of keywords) {
-                spinner.start(`正在搜索 ${keyword}（近 ${recentHours} 小时）`)
-                const r = await searchRecent(pica, keyword, recentHours, excludeCategories)
+                if (limit > 0 && comics.length >= limit) break
+                spinner.start(`正在搜索 ${keyword}（${scopeDesc}）`)
+                const r = await searchRecent(
+                    pica,
+                    keyword,
+                    recentHours,
+                    excludeCategories,
+                    includeCategories,
+                    dropRaw,
+                    limit > 0 ? limit - comics.length : 0
+                )
                 spinner.stop()
                 let added = 0
                 for (const c of r.kept) {
@@ -252,14 +298,16 @@ async function main() {
                     seen.add(c._id)
                     comics.push(c)
                     added++
+                    if (limit > 0 && comics.length >= limit) break
                 }
                 log.info(
-                    `${keyword}：时间窗内 ${pico.cyan(r.scanned)} 本，新增 ${pico.cyan(added)} 本` +
+                    `${keyword}：扫到 ${pico.cyan(r.scanned)} 本，新增 ${pico.cyan(added)} 本` +
+                        (r.droppedRaw > 0 ? `，生肉剔除 ${r.droppedRaw} 本` : '') +
                         (r.droppedCat > 0 ? `，分区排除 ${r.droppedCat} 本` : '')
                 )
             }
             if (comics.length === 0) {
-                log.warn('时间窗内没有找到符合条件的漫画')
+                log.warn('没有找到符合条件的漫画')
             }
         } else {
             for (const keyword of keywords) {
@@ -311,6 +359,20 @@ async function main() {
         pool = pool.filter((c) => isWithinHours(c.updated_at, recentHours))
         if (before !== pool.length) {
             log.info(`时间过滤：再剔除 ${pico.cyan(before - pool.length)} 本`)
+        }
+    }
+    if (includeCategories.length > 0) {
+        const before = pool.length
+        pool = pool.filter((c) => hitInclude(c, includeCategories))
+        if (before !== pool.length) {
+            log.info(`分类限定：再剔除 ${pico.cyan(before - pool.length)} 本`)
+        }
+    }
+    if (limit > 0) {
+        pool.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+        if (pool.length > limit) {
+            log.info(`数量截断：保留最新 ${pico.cyan(limit)} 部`)
+            pool = pool.slice(0, limit)
         }
     }
 
