@@ -52,6 +52,14 @@ on:
         description: '过滤生肉（无汉化组/日文标题）'
         type: boolean
         default: true
+      PICA_DL_INCLUDE_CATEGORIES:
+        description: '只要这些分类，逗号分隔（如 NTR）'
+        type: string
+        default: ''
+      PICA_DL_LIMIT:
+        description: '过滤后按更新时间取最新 N 部（留空=不限）'
+        type: string
+        default: ''
       DEBUG:
         description: '调试模式'
         type: boolean
@@ -71,6 +79,8 @@ env:
   PICA_DL_RECENT_HOURS: ${{ inputs.PICA_DL_RECENT_HOURS }}
   PICA_DL_EXCLUDE_CATEGORIES: ${{ inputs.PICA_DL_EXCLUDE_CATEGORIES }}
   PICA_DL_DROP_RAW: ${{ inputs.PICA_DL_DROP_RAW && 'true' || 'false' }}
+  PICA_DL_INCLUDE_CATEGORIES: ${{ inputs.PICA_DL_INCLUDE_CATEGORIES }}
+  PICA_DL_LIMIT: ${{ inputs.PICA_DL_LIMIT }}
 
 jobs:
   download:
