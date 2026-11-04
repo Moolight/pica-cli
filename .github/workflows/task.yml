@@ -60,6 +60,10 @@ on:
         description: '过滤后按更新时间取最新 N 部（留空=不限）'
         type: string
         default: ''
+      PICA_DL_BLOCK:
+        description: '按分区浏览（如 Cosplay），留空则走搜索/收藏夹/排行榜'
+        type: string
+        default: ''
       DEBUG:
         description: '调试模式'
         type: boolean
@@ -81,6 +85,7 @@ env:
   PICA_DL_DROP_RAW: ${{ inputs.PICA_DL_DROP_RAW && 'true' || 'false' }}
   PICA_DL_INCLUDE_CATEGORIES: ${{ inputs.PICA_DL_INCLUDE_CATEGORIES }}
   PICA_DL_LIMIT: ${{ inputs.PICA_DL_LIMIT }}
+  PICA_DL_BLOCK: ${{ inputs.PICA_DL_BLOCK }}
 
 jobs:
   download:
