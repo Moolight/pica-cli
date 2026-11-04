@@ -1,0 +1,60 @@
+name: daily
+
+# 每天 00:00（北京时间 = UTC 16:00）自动抓取最近 24 小时更新的内容
+on:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+env:
+  PICA_IN_GITHUB: true
+  PICA_ACCOUNT: ${{ secrets.PICA_ACCOUNT }}
+  PICA_PASSWORD: ${{ secrets.PICA_PASSWORD }}
+  PICA_DL_CONTENT: recent
+  PICA_DL_BLOCK: ''
+  PICA_DL_RECENT_HOURS: '24'
+  # 过滤：生肉 + 女性向 + 偽娘哲學 + CG雜圖 + 扶他樂園 + 耽美花園
+  PICA_DL_EXCLUDE_CATEGORIES: '生肉,女性向,偽娘哲學,CG雜圖,扶他樂園,耽美花園'
+  PICA_DL_DROP_RAW: 'true'
+  PICA_DL_INCLUDE_CATEGORIES: ''
+  PICA_DL_LIMIT: ''
+  PICA_DL_CHAPTER: '全部'
+  PICA_DL_FAV_PAGE: '全部'
+  PICA_DL_SEARCH_KEYWORDS: ''
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install deps and build
+        run: |
+          pnpm install
+          pnpm run build
+
+      - name: Download
+        run: pnpm start
+
+      - name: Compress
+        run: pnpm start:zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-comics
+          path: comics-zip/
+          retention-days: 7
