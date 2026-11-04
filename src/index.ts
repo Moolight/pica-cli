@@ -111,30 +111,38 @@ async function searchBlock(
     include: string[],
     dropRaw: boolean,
     limit: number
-): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number }> {
+): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number; stale: number }> {
     const kept: Comic[] = []
     let droppedRaw = 0
     let droppedCat = 0
     let scanned = 0
+    let stale = 0
     const maxPage = 80
-    for (let page = 1; page <= maxPage; page++) {
+    outer: for (let page = 1; page <= maxPage; page++) {
         const res: any = await pica.comics(block, '', pica.Order.latest, page)
         const pg = res?.comics ?? res
         const docs: Comic[] = pg?.docs || []
-        if (docs.length === 0) {
-            if (page === 1) log.warn('第 1 页无数据')
-            break
-        }
-        if (page === 1) {
-            log.info(`第 1 页 ${docs.length} 本`)
-            console.log('首本字段：' + Object.keys(docs[0]).join(','))
-            console.log('首本内容：' + JSON.stringify(docs[0]).slice(0, 700))
-        }
-        let freshOnPage = 0
+        if (docs.length === 0) break
+
         for (const c of docs) {
-            if (hours !== null && !isWithinHours(c.updated_at, hours)) continue
-            freshOnPage++
             scanned++
+            // 分区列表接口不返回 updated_at，需要单独查详情
+            if (!c.updated_at) {
+                try {
+                    const info = await pica.comicInfo(c._id)
+                    if (info?.updated_at) c.updated_at = info.updated_at
+                    if (!c.chineseTeam && info?.chineseTeam) c.chineseTeam = info.chineseTeam
+                    if (info?.tags) c.tags = info.tags
+                    if (info?.categories) c.categories = info.categories
+                } catch {
+                    // 查不到就放行，避免整批漏掉
+                }
+            }
+            if (hours !== null && c.updated_at && !isWithinHours(c.updated_at, hours)) {
+                // s=dd 已按时间倒序，遇到超窗的可以直接停
+                stale++
+                break outer
+            }
             if (hitExclude(c, exclude)) {
                 droppedCat++
                 continue
@@ -145,14 +153,13 @@ async function searchBlock(
             }
             if (!hitInclude(c, include)) continue
             kept.push(c)
+            if (limit > 0 && kept.length >= limit) break outer
         }
-        if (hours !== null && freshOnPage === 0) break
-        if (hours !== null && freshOnPage < docs.length) break
-        if (limit > 0 && kept.length >= limit) break
+
         const pages = pg?.pages ?? 1
         if (page >= pages) break
     }
-    return { kept, droppedRaw, droppedCat, scanned }
+    return { kept, droppedRaw, droppedCat, scanned, stale }
 }
 
 /**
@@ -331,7 +338,8 @@ async function main() {
         log.info(
             `${block} 分区：扫到 ${pico.cyan(r.scanned)} 本，保留 ${pico.cyan(r.kept.length)} 本` +
                 (r.droppedRaw > 0 ? `，生肉剔除 ${pico.cyan(r.droppedRaw)} 本` : '') +
-                (r.droppedCat > 0 ? `，分区排除 ${pico.cyan(r.droppedCat)} 本` : '')
+                (r.droppedCat > 0 ? `，分区排除 ${pico.cyan(r.droppedCat)} 本` : '') +
+                (r.stale > 0 ? `，超时间窗 ${pico.cyan(r.stale)} 本后停止` : '')
         )
         if (comics.length === 0) {
             log.warn('没有找到符合条件的漫画')
