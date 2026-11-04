@@ -122,11 +122,13 @@ async function searchBlock(
         const pg = res?.comics ?? res
         const docs: Comic[] = pg?.docs || []
         if (docs.length === 0) {
-            if (page === 1) {
-                log.warn('第 1 页无数据，原始响应：')
-                console.log(JSON.stringify(res).slice(0, 800))
-            }
+            if (page === 1) log.warn('第 1 页无数据')
             break
+        }
+        if (page === 1) {
+            log.info(
+                `第 1 页 ${docs.length} 本，首本：${docs[0]?.title} / ${docs[0]?.updated_at}`
+            )
         }
         let freshOnPage = 0
         for (const c of docs) {
