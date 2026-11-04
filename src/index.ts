@@ -301,8 +301,13 @@ async function main() {
             spinner.start('正在获取分区列表')
             const cats: any = await pica.categories()
             spinner.stop()
-            const names = (cats?.categories || []).map((c: any) => `${c.title}(${c.tag})`)
-            log.info(`可用分区：${pico.cyan(names.join(' / ') || '(空)')}`)
+            const arr = cats?.categories || []
+            log.info(`分区数量：${pico.cyan(arr.length)}`)
+            if (arr.length > 0) {
+                console.log('分区原始结构：' + JSON.stringify(arr.slice(0, 3)))
+                const cp = arr.find((c: any) => String(c.title || '').toLowerCase().includes('cosplay'))
+                console.log('Cosplay 条目：' + JSON.stringify(cp))
+            }
         } catch (e) {
             spinner.stop()
             log.warn(`获取分区列表失败：${e}`)
