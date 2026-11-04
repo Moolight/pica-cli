@@ -118,6 +118,86 @@ function isRaw(comic: Comic): boolean {
 }
 
 /**
+ * 全站最新：空 block 的 comics?s=dd 不返回更新流（实测只有 1 条且是旧书），
+ * 所以改为遍历所有分区，各取第一页（已按更新时间倒序），去重后合并。
+ */
+async function searchAllBlocks(
+    pica: Pica,
+    hours: number | null,
+    exclude: string[],
+    include: string[],
+    dropRaw: boolean,
+    limit: number
+): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number; stale: number }> {
+    const kept: Comic[] = []
+    const seen = new Set<string>()
+    let droppedRaw = 0
+    let droppedCat = 0
+    let scanned = 0
+    let stale = 0
+
+    const cats: any = await pica.categories()
+    const titles: string[] = (cats?.categories || [])
+        .map((c: any) => String(c?.title || '').trim())
+        .filter(Boolean)
+
+    for (const title of titles) {
+        let docs: Comic[] = []
+        try {
+            const res: any = await pica.comics(title, '', pica.Order.latest, 1)
+            const pg = res?.comics ?? res
+            docs = pg?.docs || []
+        } catch {
+            continue
+        }
+
+        for (const c of docs) {
+            if (seen.has(c._id)) continue
+            seen.add(c._id)
+            scanned++
+
+            // 分区列表接口不返回 updated_at / chineseTeam，逐条补详情
+            let stampFound = false
+            if (!c.updated_at) {
+                try {
+                    const info = await pica.comicInfo(c._id)
+                    if (info?.updated_at) {
+                        c.updated_at = info.updated_at
+                        stampFound = true
+                    }
+                    if (!c.chineseTeam && info?.chineseTeam) c.chineseTeam = info.chineseTeam
+                    if (info?.tags) c.tags = info.tags
+                    if (info?.categories) c.categories = info.categories
+                } catch {
+                    // 查不到就放行
+                }
+            } else {
+                stampFound = true
+            }
+
+            if (hours !== null && stampFound && c.updated_at && !isWithinHours(c.updated_at, hours)) {
+                stale++
+                break // 分区内已按时间倒序，遇到旧书就换下一个分区
+            }
+            if (hitExclude(c, exclude)) {
+                droppedCat++
+                continue
+            }
+            if (dropRaw && isRaw(c)) {
+                droppedRaw++
+                continue
+            }
+            if (!hitInclude(c, include)) continue
+            kept.push(c)
+        }
+    }
+
+    kept.sort((a, b) => Date.parse(b.updated_at || '') - Date.parse(a.updated_at || ''))
+    const capped = limit > 0 ? kept.slice(0, limit) : kept
+    return { kept: capped, droppedRaw, droppedCat, scanned, stale }
+}
+
+/**
  * 按分区（block）浏览：comics?c=<block>&s=dd&page=N
  * 同样支持时间窗 / 排除 / 生肉 / 数量上限
  */
@@ -325,17 +405,26 @@ async function main() {
     }
 
     if ((block || answer === 'recent') && answer !== 'leaderboard' && answer !== 'favorites') {
-        const blockLabel = block || '全站'
+        const blockLabel = block || '全站（遍历全部分区）'
         spinner.start(`正在浏览 ${blockLabel} 的最新更新`)
-        const r = await searchBlock(
-            pica,
-            block,
-            recentHours,
-            excludeCategories,
-            includeCategories,
-            dropRaw,
-            limit
-        )
+        const r = block
+            ? await searchBlock(
+                  pica,
+                  block,
+                  recentHours,
+                  excludeCategories,
+                  includeCategories,
+                  dropRaw,
+                  limit
+              )
+            : await searchAllBlocks(
+                  pica,
+                  recentHours,
+                  excludeCategories,
+                  includeCategories,
+                  dropRaw,
+                  limit
+              )
         spinner.stop()
         for (const c of r.kept) {
             comics.push(c)
@@ -344,7 +433,7 @@ async function main() {
             `${blockLabel}：扫到 ${pico.cyan(r.scanned)} 本，保留 ${pico.cyan(r.kept.length)} 本` +
                 (r.droppedRaw > 0 ? `，生肉剔除 ${pico.cyan(r.droppedRaw)} 本` : '') +
                 (r.droppedCat > 0 ? `，分区排除 ${pico.cyan(r.droppedCat)} 本` : '') +
-                (r.stale > 0 ? `，超时间窗 ${pico.cyan(r.stale)} 本后停止` : '')
+                (r.stale > 0 ? `，超时间窗 ${pico.cyan(r.stale)} 本` : '')
         )
         if (comics.length === 0) {
             log.warn('没有找到符合条件的漫画')
