@@ -57,6 +57,10 @@ function parseLimit(): number {
     return Math.floor(n)
 }
 
+function parseBlock(): string {
+    return process.env.PICA_DL_BLOCK?.trim() || ''
+}
+
 function isWithinHours(updatedAt: string, hours: number): boolean {
     const t = Date.parse(updatedAt)
     if (!Number.isFinite(t)) return false
@@ -93,6 +97,54 @@ function isRaw(comic: Comic): boolean {
     const team = (comic.chineseTeam || '').trim()
     if (!team) return true
     return false
+}
+
+/**
+ * 按分区（block）浏览：comics?c=<block>&s=dd&page=N
+ * 同样支持时间窗 / 排除 / 生肉 / 数量上限
+ */
+async function searchBlock(
+    pica: Pica,
+    block: string,
+    hours: number | null,
+    exclude: string[],
+    include: string[],
+    dropRaw: boolean,
+    limit: number
+): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number }> {
+    const kept: Comic[] = []
+    let droppedRaw = 0
+    let droppedCat = 0
+    let scanned = 0
+    const maxPage = 80
+    for (let page = 1; page <= maxPage; page++) {
+        const res: any = await pica.comics(block, '', pica.Order.latest, page)
+        const pg = res?.comics ?? res
+        const docs: Comic[] = pg?.docs || []
+        if (docs.length === 0) break
+        let freshOnPage = 0
+        for (const c of docs) {
+            if (hours !== null && !isWithinHours(c.updated_at, hours)) continue
+            freshOnPage++
+            scanned++
+            if (hitExclude(c, exclude)) {
+                droppedCat++
+                continue
+            }
+            if (dropRaw && isRaw(c)) {
+                droppedRaw++
+                continue
+            }
+            if (!hitInclude(c, include)) continue
+            kept.push(c)
+        }
+        if (hours !== null && freshOnPage === 0) break
+        if (hours !== null && freshOnPage < docs.length) break
+        if (limit > 0 && kept.length >= limit) break
+        const pages = pg?.pages ?? 1
+        if (page >= pages) break
+    }
+    return { kept, droppedRaw, droppedCat, scanned }
 }
 
 /**
@@ -157,6 +209,7 @@ async function main() {
     const excludeCategories = parseList('PICA_DL_EXCLUDE_CATEGORIES')
     const includeCategories = parseList('PICA_DL_INCLUDE_CATEGORIES')
     const limit = parseLimit()
+    const block = parseBlock()
     const dropRaw = process.env.PICA_DL_DROP_RAW !== 'false'
 
     const account =
@@ -191,6 +244,9 @@ async function main() {
     }
     if (limit > 0) {
         log.info(`数量上限：${pico.cyan(limit + ' 部')}（过滤后按更新时间取最新的）`)
+    }
+    if (block) {
+        log.info(`分区浏览：${pico.cyan(block)}（按更新时间倒序）`)
     }
 
     const answer =
@@ -234,7 +290,33 @@ async function main() {
         console.log(table.toString())
     }
 
-    if (answer === 'search') {
+    if (block && answer === 'search') {
+        spinner.start(`正在浏览分区 ${block}`)
+        const r = await searchBlock(
+            pica,
+            block,
+            recentHours,
+            excludeCategories,
+            includeCategories,
+            dropRaw,
+            limit
+        )
+        spinner.stop()
+        for (const c of r.kept) {
+            comics.push(c)
+        }
+        log.info(
+            `${block} 分区：扫到 ${pico.cyan(r.scanned)} 本，保留 ${pico.cyan(r.kept.length)} 本` +
+                (r.droppedRaw > 0 ? `，生肉剔除 ${pico.cyan(r.droppedRaw)} 本` : '') +
+                (r.droppedCat > 0 ? `，分区排除 ${pico.cyan(r.droppedCat)} 本` : '')
+        )
+        if (comics.length === 0) {
+            log.warn('没有找到符合条件的漫画')
+            return
+        }
+    }
+
+    if (answer === 'search' && !block) {
         if (PICA_IN_GITHUB && !PICA_DL_SEARCH_KEYWORDS) {
             log.warn('没有输入搜索关键字')
             return
