@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       PICA_DL_CONTENT:
-        description: '想下点什么？搜索/收藏夹/排行榜'
+        description: '想下点什么？搜索/最新更新/收藏夹/排行榜'
         required: true
         type: choice
         default: search
         options:
           - search
+          - recent
           - favorites
           - leaderboard
       PICA_DL_FAV_PAGE:
