@@ -32,6 +32,33 @@ const checkboxHelpTip = ` (${keysTip.join(', ')})`
 /** 生肉标记：标题/标签/分区里出现这些词就判定为未汉化 */
 const RAW_MARKERS = ['生肉', '日文', '日本語', '日語', '无汉化', '無漢化', 'raw', 'untranslated']
 
+/**
+ * 繁简归一：哔咔的分区名是繁体（偽娘哲學/CG雜圖/扶他樂園/耽美花園），
+ * 而用户写的是简体，直接 substring 会全部匹配不上。
+ */
+const T2S: Record<string, string> = {
+    偽: '伪', 學: '学', 雜: '杂', 圖: '图', 樂: '乐', 園: '园', 長: '长',
+    單: '单', 強: '强', 類: '类', 東: '东', 艦: '舰', 隊: '队', 語: '语',
+    漢: '汉', 譯: '译', 圓: '圆', 藍: '蓝', 純: '纯', 愛: '爱', 後: '后',
+    宮: '宫', 閃: '闪', 轉: '转', 換: '换', 戀: '恋', 帶: '带', 歐: '欧',
+    書: '书', 錄: '录', 濕: '湿', 薦: '荐', 禮: '礼', 電: '电', 們: '们',
+    嗶: '哔', 動: '动', 話: '话', 頭: '头', 髮: '发', 體: '体', 雙: '双',
+    從: '从', 來: '来', 個: '个', 麼: '么', 這: '这', 那: '那', 與: '与'
+}
+
+function norm(text: string): string {
+    let out = ''
+    for (const ch of text.toLowerCase()) {
+        out += T2S[ch] ?? ch
+    }
+    return out
+}
+
+function hitsAny(text: string, terms: string[]): boolean {
+    const hay = norm(text)
+    return terms.some((t) => hay.includes(norm(t)))
+}
+
 function parseRecentHours(): number | null {
     const raw = process.env.PICA_DL_RECENT_HOURS?.trim()
     if (!raw) return null
@@ -67,32 +94,23 @@ function isWithinHours(updatedAt: string, hours: number): boolean {
     return Date.now() - t <= hours * 3600 * 1000
 }
 
+function comicFields(comic: Comic): string {
+    return [...(comic.categories || []), ...(comic.tags || []), comic.title || ''].join('|')
+}
+
 function hitExclude(comic: Comic, exclude: string[]): boolean {
     if (exclude.length === 0) return false
-    const fields = [
-        ...(comic.categories || []),
-        ...(comic.tags || []),
-        comic.title || ''
-    ].join('|').toLowerCase()
-    return exclude.some((e) => fields.includes(e.toLowerCase()))
+    return hitsAny(comicFields(comic), exclude)
 }
 
 /** 只保留命中指定分类的漫画（空数组=不限制） */
 function hitInclude(comic: Comic, include: string[]): boolean {
     if (include.length === 0) return true
-    const fields = [...(comic.categories || []), ...(comic.tags || [])]
-        .join('|')
-        .toLowerCase()
-    return include.some((e) => fields.includes(e.toLowerCase()))
+    return hitsAny([...(comic.categories || []), ...(comic.tags || [])].join('|'), include)
 }
 
 function isRaw(comic: Comic): boolean {
-    const fields = [
-        comic.title || '',
-        ...(comic.categories || []),
-        ...(comic.tags || [])
-    ].join('|').toLowerCase()
-    if (RAW_MARKERS.some((m) => fields.includes(m.toLowerCase()))) return true
+    if (hitsAny(comicFields(comic), RAW_MARKERS)) return true
     // chineseTeam 为空 = 没有汉化组
     const team = (comic.chineseTeam || '').trim()
     if (!team) return true
@@ -270,6 +288,7 @@ async function main() {
             message: '想下载哪些漫画？',
             choices: [
                 { name: '去搜索', value: 'search' },
+                { name: '最新更新（全站/分区）', value: 'recent' },
                 { name: '收藏夹', value: 'favorites' },
                 { name: '排行榜', value: 'leaderboard' }
             ]
@@ -305,23 +324,9 @@ async function main() {
         console.log(table.toString())
     }
 
-    if (block && answer === 'search') {
-        try {
-            spinner.start('正在获取分区列表')
-            const cats: any = await pica.categories()
-            spinner.stop()
-            const arr = cats?.categories || []
-            log.info(`分区数量：${pico.cyan(arr.length)}`)
-            if (arr.length > 0) {
-                console.log('分区原始结构：' + JSON.stringify(arr.slice(0, 3)))
-                const cp = arr.find((c: any) => String(c.title || '').toLowerCase().includes('cosplay'))
-                console.log('Cosplay 条目：' + JSON.stringify(cp))
-            }
-        } catch (e) {
-            spinner.stop()
-            log.warn(`获取分区列表失败：${e}`)
-        }
-        spinner.start(`正在浏览分区 ${block}`)
+    if ((block || answer === 'recent') && answer !== 'leaderboard' && answer !== 'favorites') {
+        const blockLabel = block || '全站'
+        spinner.start(`正在浏览 ${blockLabel} 的最新更新`)
         const r = await searchBlock(
             pica,
             block,
@@ -336,7 +341,7 @@ async function main() {
             comics.push(c)
         }
         log.info(
-            `${block} 分区：扫到 ${pico.cyan(r.scanned)} 本，保留 ${pico.cyan(r.kept.length)} 本` +
+            `${blockLabel}：扫到 ${pico.cyan(r.scanned)} 本，保留 ${pico.cyan(r.kept.length)} 本` +
                 (r.droppedRaw > 0 ? `，生肉剔除 ${pico.cyan(r.droppedRaw)} 本` : '') +
                 (r.droppedCat > 0 ? `，分区排除 ${pico.cyan(r.droppedCat)} 本` : '') +
                 (r.stale > 0 ? `，超时间窗 ${pico.cyan(r.stale)} 本后停止` : '')
