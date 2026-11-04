@@ -121,7 +121,13 @@ async function searchBlock(
         const res: any = await pica.comics(block, '', pica.Order.latest, page)
         const pg = res?.comics ?? res
         const docs: Comic[] = pg?.docs || []
-        if (docs.length === 0) break
+        if (docs.length === 0) {
+            if (page === 1) {
+                log.warn('第 1 页无数据，原始响应：')
+                console.log(JSON.stringify(res).slice(0, 800))
+            }
+            break
+        }
         let freshOnPage = 0
         for (const c of docs) {
             if (hours !== null && !isWithinHours(c.updated_at, hours)) continue
@@ -291,6 +297,16 @@ async function main() {
     }
 
     if (block && answer === 'search') {
+        try {
+            spinner.start('正在获取分区列表')
+            const cats: any = await pica.categories()
+            spinner.stop()
+            const names = (cats?.categories || []).map((c: any) => `${c.title}(${c.tag})`)
+            log.info(`可用分区：${pico.cyan(names.join(' / ') || '(空)')}`)
+        } catch (e) {
+            spinner.stop()
+            log.warn(`获取分区列表失败：${e}`)
+        }
         spinner.start(`正在浏览分区 ${block}`)
         const r = await searchBlock(
             pica,
