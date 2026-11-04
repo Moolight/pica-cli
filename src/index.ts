@@ -126,9 +126,9 @@ async function searchBlock(
             break
         }
         if (page === 1) {
-            log.info(
-                `第 1 页 ${docs.length} 本，首本：${docs[0]?.title} / ${docs[0]?.updated_at}`
-            )
+            log.info(`第 1 页 ${docs.length} 本`)
+            console.log('首本字段：' + Object.keys(docs[0]).join(','))
+            console.log('首本内容：' + JSON.stringify(docs[0]).slice(0, 700))
         }
         let freshOnPage = 0
         for (const c of docs) {
