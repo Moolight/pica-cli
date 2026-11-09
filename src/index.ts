@@ -305,6 +305,35 @@ async function searchRecent(
     return { kept, droppedRaw, droppedCat, scanned }
 }
 
+/**
+ * 带重试的异步调用。
+ * pica-cli 自带的 axios 拦截器重试只覆盖「请求阶段」，
+ * 像 read ECONNRESET 这种在响应体读取阶段才炸的错误会被直接 reject，
+ * 一个图片挂掉就让整轮 exit 1、连 artifact 都产不出来。
+ */
+async function withRetry<T>(
+    fn: () => Promise<T>,
+    label: string,
+    retries = 3,
+    baseDelay = 1500
+): Promise<T> {
+    let lastErr: unknown
+    for (let i = 0; i <= retries; i++) {
+        try {
+            return await fn()
+        } catch (err) {
+            lastErr = err
+            if (i === retries) break
+            const wait = baseDelay * (i + 1)
+            log.warn(
+                `${label} 第${i + 1}次失败（${(err as Error)?.message || err}），${wait}ms 后重试`
+            )
+            await new Promise((r) => setTimeout(r, wait))
+        }
+    }
+    throw lastErr
+}
+
 async function main() {
     const {
         PICA_ACCOUNT,
@@ -609,10 +638,19 @@ async function main() {
         const cid = comic._id
 
         spinner.start('正在获取章节信息')
-        let episodes = await pica.episodesAll(cid).catch((error) => {
+        let episodes = await withRetry(
+            () => pica.episodesAll(cid),
+            `「${title}」获取章节`,
+            2
+        ).catch((error) => {
             if (error === 400) {
                 spinner.stop()
                 log.error(`「${title}」无法访问，可能已被哔咔禁止`)
+            } else {
+                spinner.stop()
+                log.warn(
+                    `「${title}」获取章节失败（${(error as Error)?.message || error}），跳过该漫画`
+                )
             }
             return []
         })
@@ -670,7 +708,21 @@ async function main() {
         for (const ep of selectedEpisodes) {
             epCurrent += 1
             spinner.start(`${prefix} 正在获取章节图片`)
-            let pictures = await pica.picturesAll(cid, ep)
+            let pictures: Awaited<ReturnType<typeof pica.picturesAll>> = []
+            try {
+                pictures = await withRetry(
+                    () => pica.picturesAll(cid, ep),
+                    `${prefix} ${ep.title} 获取图片列表`,
+                    2
+                )
+            } catch (err) {
+                spinner.stop()
+                bar.terminate()
+                log.error(
+                    `${prefix} ${ep.title} 获取图片列表失败（${(err as Error)?.message || err}），跳过该章节`
+                )
+                continue
+            }
             pictures = filterPictures(pictures, title, ep.title)
             spinner.stop()
 
@@ -683,13 +735,28 @@ async function main() {
 
             bar.update(0)
 
+            const failed: string[] = []
+
+            // 单张图片失败重试 3 次，仍失败则记为残缺、不中断整轮
             const pics = pictures.map((pic) =>
                 limit(async () => {
-                    await pica.download(pic.url, {
-                        title,
-                        epTitle: ep.title,
-                        picName: pic.name
-                    })
+                    try {
+                        await withRetry(
+                            () =>
+                                pica.download(pic.url, {
+                                    title,
+                                    epTitle: ep.title,
+                                    picName: pic.name
+                                }),
+                            `${prefix} ${ep.title} ${pic.name}`,
+                            3
+                        )
+                    } catch (err) {
+                        failed.push(pic.name)
+                        log.warn(
+                            `${prefix} ${ep.title} ${pic.name} 下载失败（${(err as Error)?.message || err}），已跳过`
+                        )
+                    }
                     picCurrent += 1
                     bar.update((picCurrent / picTotal) * 100)
                 })
@@ -698,10 +765,17 @@ async function main() {
             await Promise.all(pics)
             bar.terminate()
 
-            mark(cid, ep.id)
-            log.info(
-                `${prefix} ${pico.green('✓')} ${ep.title} 下载完成 (${epCurrent}/${epTotal})`
-            )
+            if (failed.length === 0) {
+                mark(cid, ep.id)
+                log.info(
+                    `${prefix} ${pico.green('✓')} ${ep.title} 下载完成 (${epCurrent}/${epTotal})`
+                )
+            } else {
+                // 有缺图就不写 done，下次跑还能补
+                log.warn(
+                    `${prefix} ${ep.title} 完成但有 ${failed.length} 张失败（${failed.slice(0, 5).join('、')}${failed.length > 5 ? '…' : ''}），不记为已完成`
+                )
+            }
         }
     }
 
