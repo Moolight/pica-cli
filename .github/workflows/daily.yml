@@ -5,6 +5,15 @@ on:
   schedule:
     - cron: '0 16 * * *'
   workflow_dispatch:
+    inputs:
+      PICA_DL_RECENT_HOURS:
+        description: '往回抓多少小时（默认 24；补档填 72/168）'
+        required: false
+        default: '24'
+      PICA_DL_EXCLUDE_CATEGORIES:
+        description: '排除的分区（逗号分隔）'
+        required: false
+        default: ''
 
 env:
   PICA_IN_GITHUB: true
@@ -12,9 +21,9 @@ env:
   PICA_PASSWORD: ${{ secrets.PICA_PASSWORD }}
   PICA_DL_CONTENT: recent
   PICA_DL_BLOCK: ''
-  PICA_DL_RECENT_HOURS: '24'
+  PICA_DL_RECENT_HOURS: ${{ github.event.inputs.PICA_DL_RECENT_HOURS || '24' }}
   # 过滤：生肉 + 女性向 + 偽娘哲學 + CG雜圖 + 扶他樂園 + 耽美花園
-  PICA_DL_EXCLUDE_CATEGORIES: '生肉,女性向,偽娘哲學,CG雜圖,扶他樂園,耽美花園'
+  PICA_DL_EXCLUDE_CATEGORIES: ${{ github.event.inputs.PICA_DL_EXCLUDE_CATEGORIES || '生肉,女性向,偽娘哲學,CG雜圖,扶他樂園,耽美花園' }}
   PICA_DL_DROP_RAW: 'true'
   PICA_DL_INCLUDE_CATEGORIES: ''
   PICA_DL_LIMIT: ''
