@@ -22,7 +22,8 @@
     "lint": "eslint --cache --ignore-path .gitignore .",
     "lint:fix": "eslint --cache --fix --ignore-path .gitignore .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "start:meta": "node dist/meta.js"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm lint-staged",
