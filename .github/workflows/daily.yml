@@ -25,6 +25,10 @@ env:
   # 过滤：生肉 + 女性向 + 偽娘哲學 + CG雜圖 + 扶他樂園 + 耽美花園
   PICA_DL_EXCLUDE_CATEGORIES: ${{ github.event.inputs.PICA_DL_EXCLUDE_CATEGORIES || '生肉,女性向,偽娘哲學,CG雜圖,扶他樂園,耽美花園' }}
   PICA_DL_DROP_RAW: 'true'
+  # 严格模式：把「没有汉化组」也当生肉。默认关，否则 Cosplay/写真/CG 集会被全灭
+  PICA_DL_RAW_STRICT: 'false'
+  # 打印被过滤明细，方便排查「怎么更新这么少」
+  PICA_DL_DEBUG_DROPS: 'true'
   PICA_DL_INCLUDE_CATEGORIES: ''
   PICA_DL_LIMIT: ''
   PICA_DL_CHAPTER: '全部'
