@@ -97,6 +97,27 @@ function parseBlock(): string {
     return process.env.PICA_DL_BLOCK?.trim() || ''
 }
 
+/**
+ * 标题层筛选：用户在网页里填的关键词，命中标题就排除 / 保留。
+ * 和分区排除分开，因为分区名是固定的，标题是自由的。
+ */
+function hitTitle(comic: Comic, terms: string[]): boolean {
+    if (terms.length === 0) return false
+    return hitsAny(comic.title || '', terms)
+}
+
+/** 只下指定的 id（网页预览后勾选的那几本）。空 = 不限制。 */
+function parsePickIds(): Set<string> {
+    const raw = process.env.PICA_DL_PICK_IDS?.trim()
+    if (!raw) return new Set()
+    return new Set(
+        raw
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+    )
+}
+
 function isWithinHours(updatedAt: string, hours: number): boolean {
     const t = Date.parse(updatedAt)
     if (!Number.isFinite(t)) return false
@@ -442,6 +463,10 @@ async function main() {
     const dropRaw = process.env.PICA_DL_DROP_RAW !== 'false'
     const strictRaw = parseFlag('PICA_DL_RAW_STRICT')
     const debugDrops = parseFlag('PICA_DL_DEBUG_DROPS')
+    const titleExclude = parseList('PICA_DL_TITLE_EXCLUDE')
+    const titleInclude = parseList('PICA_DL_TITLE_INCLUDE')
+    const pickIds = parsePickIds()
+    const dryRun = parseFlag('PICA_DL_DRY_RUN')
     const drops: Drop[] = []
 
     const account =
@@ -473,6 +498,18 @@ async function main() {
     }
     if (includeCategories.length > 0) {
         log.info(`分类限定：${pico.cyan(includeCategories.join(', '))}`)
+    }
+    if (titleExclude.length > 0) {
+        log.info(`标题排除：${pico.cyan(titleExclude.join(', '))}`)
+    }
+    if (titleInclude.length > 0) {
+        log.info(`标题限定：${pico.cyan(titleInclude.join(', '))}`)
+    }
+    if (pickIds.size > 0) {
+        log.info(`指定清单：${pico.cyan(pickIds.size + ' 部')}（只下这几本）`)
+    }
+    if (dryRun) {
+        log.info(`干跑：${pico.cyan('只列清单，不下载')}`)
     }
     if (limit > 0) {
         log.info(`数量上限：${pico.cyan(limit + ' 部')}（过滤后按更新时间取最新的）`)
@@ -704,6 +741,39 @@ async function main() {
             log.info(`分类限定：再剔除 ${pico.cyan(before - pool.length)} 本`)
         }
     }
+    if (titleExclude.length > 0) {
+        const before = pool.length
+        pool = pool.filter((c) => {
+            if (hitTitle(c, titleExclude)) {
+                drops.push({ title: c.title, reason: '标题命中排除词', tags: comicTags(c) })
+                return false
+            }
+            return true
+        })
+        if (before !== pool.length) {
+            log.info(`标题排除：再剔除 ${pico.cyan(before - pool.length)} 本`)
+        }
+    }
+    if (titleInclude.length > 0) {
+        const before = pool.length
+        pool = pool.filter((c) => {
+            if (!hitTitle(c, titleInclude)) {
+                drops.push({ title: c.title, reason: '标题未命中限定词', tags: comicTags(c) })
+                return false
+            }
+            return true
+        })
+        if (before !== pool.length) {
+            log.info(`标题限定：再剔除 ${pico.cyan(before - pool.length)} 本`)
+        }
+    }
+    if (pickIds.size > 0) {
+        const before = pool.length
+        pool = pool.filter((c) => pickIds.has(c._id))
+        if (before !== pool.length) {
+            log.info(`指定清单：按 id 再剔除 ${pico.cyan(before - pool.length)} 本`)
+        }
+    }
     if (limit > 0) {
         pool.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
         if (pool.length > limit) {
@@ -743,6 +813,22 @@ async function main() {
     console.log(listTable.toString())
 
     log.info(`${pico.cyan(pool.length)} 部漫画等待下载`)
+
+    if (dryRun) {
+        // 干跑：把清单以机器可读形式吐出来，网页端解析这个 JSON 展示
+        const preview = pool.map((c) => ({
+            id: c._id,
+            title: (c.title || '').trim(),
+            updated: (c.updated_at || '').slice(0, 19).replace('T', ' '),
+            categories: c.categories || [],
+            tags: c.tags || [],
+            author: c.author || '',
+            pages: (c as any).pagesCount || 0
+        }))
+        console.log('__PREVIEW_JSON__' + JSON.stringify(preview))
+        log.info('干跑模式：只打印清单，不下载')
+        return
+    }
 
     for (const comic of pool) {
         const title = comic.title.trim()
