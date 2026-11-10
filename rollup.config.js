@@ -14,7 +14,8 @@ const pkg = JSON.parse(
 export default defineConfig({
     input: {
         index: 'src/index.ts',
-        zip: 'src/zip.ts'
+        zip: 'src/zip.ts',
+        meta: 'src/meta.ts'
     },
     output: {
         dir: 'dist',
