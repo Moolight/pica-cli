@@ -1,19 +1,44 @@
 name: daily
 
 # 每天 00:00（北京时间 = UTC 16:00）自动抓取最近 24 小时更新的内容
+# 网页控制台也可以手动触发，并把筛选条件透传进来
 on:
   schedule:
     - cron: '0 16 * * *'
   workflow_dispatch:
     inputs:
       PICA_DL_RECENT_HOURS:
-        description: '往回抓多少小时（默认 24；补档填 72/168）'
+        description: '往回抓多少小时（默认 24；补档填 72/168/720）'
         required: false
         default: '24'
       PICA_DL_EXCLUDE_CATEGORIES:
-        description: '排除的分区（逗号分隔）'
+        description: '排除的分区（逗号分隔；留空用默认那六类）'
         required: false
         default: ''
+      PICA_DL_INCLUDE_CATEGORIES:
+        description: '只要这些分区（逗号分隔；留空不限）'
+        required: false
+        default: ''
+      PICA_DL_TITLE_EXCLUDE:
+        description: '标题里含这些词就不要（逗号分隔）'
+        required: false
+        default: ''
+      PICA_DL_TITLE_INCLUDE:
+        description: '标题里必须含其中之一（逗号分隔）'
+        required: false
+        default: ''
+      PICA_DL_LIMIT:
+        description: '最多下多少部（留空不限）'
+        required: false
+        default: ''
+      PICA_DL_PICK_IDS:
+        description: '只下这些 id（逗号分隔；网页预览后勾选的结果）'
+        required: false
+        default: ''
+      PICA_DL_DRY_RUN:
+        description: '只预览清单不下载（true/false）'
+        required: false
+        default: 'false'
 
 env:
   PICA_IN_GITHUB: true
@@ -24,13 +49,17 @@ env:
   PICA_DL_RECENT_HOURS: ${{ github.event.inputs.PICA_DL_RECENT_HOURS || '24' }}
   # 过滤：生肉 + 女性向 + 偽娘哲學 + CG雜圖 + 扶他樂園 + 耽美花園
   PICA_DL_EXCLUDE_CATEGORIES: ${{ github.event.inputs.PICA_DL_EXCLUDE_CATEGORIES || '生肉,女性向,偽娘哲學,CG雜圖,扶他樂園,耽美花園' }}
+  PICA_DL_INCLUDE_CATEGORIES: ${{ github.event.inputs.PICA_DL_INCLUDE_CATEGORIES || '' }}
+  PICA_DL_TITLE_EXCLUDE: ${{ github.event.inputs.PICA_DL_TITLE_EXCLUDE || '' }}
+  PICA_DL_TITLE_INCLUDE: ${{ github.event.inputs.PICA_DL_TITLE_INCLUDE || '' }}
+  PICA_DL_LIMIT: ${{ github.event.inputs.PICA_DL_LIMIT || '' }}
+  PICA_DL_PICK_IDS: ${{ github.event.inputs.PICA_DL_PICK_IDS || '' }}
+  PICA_DL_DRY_RUN: ${{ github.event.inputs.PICA_DL_DRY_RUN || 'false' }}
   PICA_DL_DROP_RAW: 'true'
   # 严格模式：把「没有汉化组」也当生肉。默认关，否则 Cosplay/写真/CG 集会被全灭
   PICA_DL_RAW_STRICT: 'false'
   # 打印被过滤明细，方便排查「怎么更新这么少」
   PICA_DL_DEBUG_DROPS: 'true'
-  PICA_DL_INCLUDE_CATEGORIES: ''
-  PICA_DL_LIMIT: ''
   PICA_DL_CHAPTER: '全部'
   PICA_DL_FAV_PAGE: '全部'
   PICA_DL_SEARCH_KEYWORDS: ''
@@ -63,9 +92,11 @@ jobs:
         run: pnpm start
 
       - name: Compress
+        if: ${{ github.event.inputs.PICA_DL_DRY_RUN != 'true' }}
         run: pnpm start:zip
 
       - name: Upload artifact
+        if: ${{ github.event.inputs.PICA_DL_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: daily-comics
