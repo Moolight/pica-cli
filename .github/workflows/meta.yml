@@ -1,0 +1,50 @@
+name: meta
+
+on:
+  workflow_dispatch:
+    inputs:
+      PICA_META_TITLES:
+        description: '要查元信息的书名，一行一个'
+        required: true
+        type: string
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install deps and build
+        run: |
+          pnpm install
+          pnpm run build
+
+      - name: Fetch meta
+        env:
+          PICA_ACCOUNT: ${{ secrets.PICA_ACCOUNT }}
+          PICA_PASSWORD: ${{ secrets.PICA_PASSWORD }}
+          PICA_META_TITLES: ${{ github.event.inputs.PICA_META_TITLES }}
+          PICA_IN_GITHUB: '1'
+        run: pnpm start:meta
+
+      - name: Upload meta
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pica-meta
+          path: meta-out/
+          retention-days: 7
+          if-no-files-found: warn
