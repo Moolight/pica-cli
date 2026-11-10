@@ -157,8 +157,18 @@ type Drop = { title: string; reason: string; tags: string }
 
 /**
  * 全站最新：空 block 的 comics?s=dd 不返回更新流（实测只有 1 条且是旧书），
- * 所以改为遍历所有分区，各取第一页（已按更新时间倒序），去重后合并。
+ * 所以改为遍历所有分区，按更新时间倒序翻页，去重后合并。
+ *
+ * 翻页页数按时间窗估算：一页约 20 本，大分区一天能出好几页。
+ * 只看第一页的话，120 小时窗口会漏掉容量大的分区里的旧一半。
  */
+function pagesForHours(hours: number | null): number {
+    if (hours === null) return 3
+    if (hours <= 24) return 1
+    if (hours <= 72) return 3
+    if (hours <= 168) return 5
+    return 8
+}
 async function searchAllBlocks(
     pica: Pica,
     hours: number | null,
@@ -180,64 +190,70 @@ async function searchAllBlocks(
     const titles: string[] = (cats?.categories || [])
         .map((c: any) => String(c?.title || '').trim())
         .filter(Boolean)
+    const maxPages = pagesForHours(hours)
 
     for (const title of titles) {
-        let docs: Comic[] = []
-        try {
-            const res: any = await pica.comics(title, '', pica.Order.latest, 1)
-            const pg = res?.comics ?? res
-            docs = pg?.docs || []
-        } catch {
-            continue
-        }
+        let stopBlock = false
+        for (let page = 1; page <= maxPages && !stopBlock; page++) {
+            let docs: Comic[] = []
+            try {
+                const res: any = await pica.comics(title, '', pica.Order.latest, page)
+                const pg = res?.comics ?? res
+                docs = pg?.docs || []
+            } catch {
+                break
+            }
+            if (docs.length === 0) break
 
-        for (const c of docs) {
-            if (seen.has(c._id)) continue
-            seen.add(c._id)
-            scanned++
+            for (const c of docs) {
+                if (seen.has(c._id)) continue
+                seen.add(c._id)
+                scanned++
 
-            // 分区列表接口不返回 updated_at / chineseTeam，逐条补详情
-            let stampFound = false
-            if (!c.updated_at) {
-                try {
-                    const info = await pica.comicInfo(c._id)
-                    if (info?.updated_at) {
-                        c.updated_at = info.updated_at
-                        stampFound = true
+                // 分区列表接口不返回 updated_at / chineseTeam，逐条补详情
+                let stampFound = false
+                if (!c.updated_at) {
+                    try {
+                        const info = await pica.comicInfo(c._id)
+                        if (info?.updated_at) {
+                            c.updated_at = info.updated_at
+                            stampFound = true
+                        }
+                        if (!c.chineseTeam && info?.chineseTeam) c.chineseTeam = info.chineseTeam
+                        if (info?.tags) c.tags = info.tags
+                        if (info?.categories) c.categories = info.categories
+                    } catch {
+                        // 查不到就放行
                     }
-                    if (!c.chineseTeam && info?.chineseTeam) c.chineseTeam = info.chineseTeam
-                    if (info?.tags) c.tags = info.tags
-                    if (info?.categories) c.categories = info.categories
-                } catch {
-                    // 查不到就放行
+                } else {
+                    stampFound = true
                 }
-            } else {
-                stampFound = true
-            }
 
-            if (hours !== null && stampFound && c.updated_at && !isWithinHours(c.updated_at, hours)) {
-                stale++
-                break // 分区内已按时间倒序，遇到旧书就换下一个分区
+                if (hours !== null && stampFound && c.updated_at && !isWithinHours(c.updated_at, hours)) {
+                    stale++
+                    stopBlock = true // 分区内已按时间倒序，遇到旧书就换下一个分区
+                    break
+                }
+                if (hitExclude(c, exclude)) {
+                    droppedCat++
+                    drops.push({ title: c.title, reason: `分区/标签命中 ${exclude.join(',')}`, tags: comicTags(c) })
+                    continue
+                }
+                if (dropRaw && isRaw(c, strictRaw)) {
+                    droppedRaw++
+                    drops.push({
+                        title: c.title,
+                        reason: strictRaw ? '生肉（严格：含无汉化组）' : '生肉标记',
+                        tags: comicTags(c)
+                    })
+                    continue
+                }
+                if (!hitInclude(c, include)) {
+                    drops.push({ title: c.title, reason: `未命中分类 ${include.join(',')}`, tags: comicTags(c) })
+                    continue
+                }
+                kept.push(c)
             }
-            if (hitExclude(c, exclude)) {
-                droppedCat++
-                drops.push({ title: c.title, reason: `分区/标签命中 ${exclude.join(',')}`, tags: comicTags(c) })
-                continue
-            }
-            if (dropRaw && isRaw(c, strictRaw)) {
-                droppedRaw++
-                drops.push({
-                    title: c.title,
-                    reason: strictRaw ? '生肉（严格：含无汉化组）' : '生肉标记',
-                    tags: comicTags(c)
-                })
-                continue
-            }
-            if (!hitInclude(c, include)) {
-                drops.push({ title: c.title, reason: `未命中分类 ${include.join(',')}`, tags: comicTags(c) })
-                continue
-            }
-            kept.push(c)
         }
     }
 
