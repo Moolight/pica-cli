@@ -13,18 +13,54 @@ function norm(s: string) {
         .replace(/[\s\-_·:：!！?？'"“”‘’()（）\[\]【】<>《》/\\|,，.。~～]/g, '')
 }
 
+/**
+ * 把目录名拆成若干个可搜索的候选词。
+ * 本地目录名常带 `︱` `／` 之类的双语分隔符，整串拿去搜是搜不到的。
+ */
+function queryCandidates(title: string) {
+    const seps = /[︱|｜/／]/
+    const parts = title
+        .split(seps)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    const out: string[] = []
+    // 先整串（能搜到最好，最准）
+    out.push(title.trim())
+    // 再逐段，长的优先
+    parts
+        .slice()
+        .sort((a, b) => b.length - a.length)
+        .forEach((p) => {
+            if (p !== title.trim()) out.push(p)
+        })
+    return Array.from(new Set(out.filter(Boolean)))
+}
+
 function pickBest(docs: any[], title: string) {
-    const want = norm(title)
-    if (!want) return null
-    // 1) 完全一致
-    let hit = docs.find((d) => norm(d.title) === want)
+    const full = norm(title)
+    if (!full) return null
+    // 1) 整串完全一致
+    let hit = docs.find((d) => norm(d.title) === full)
     if (hit) return hit
-    // 2) 互相包含（防止标题被截断 / 后缀不同）
+    // 2) 整串互相包含
     hit = docs.find((d) => {
         const t = norm(d.title)
-        return t && (t.includes(want) || want.includes(t))
+        return t && (t.includes(full) || full.includes(t))
     })
-    return hit || null
+    if (hit) return hit
+    // 3) 按分隔符拆段，任一段命中就算（双语标题常见）
+    const pieces = title
+        .split(/[︱|｜/／]/)
+        .map((s) => norm(s))
+        .filter((s) => s.length >= 4)
+    for (const p of pieces) {
+        hit = docs.find((d) => {
+            const t = norm(d.title)
+            return t && (t === p || t.includes(p) || p.includes(t))
+        })
+        if (hit) return hit
+    }
+    return null
 }
 
 async function main() {
@@ -54,10 +90,15 @@ async function main() {
     for (let i = 0; i < titles.length; i++) {
         const title = titles[i]
         const tag = `[${i + 1}/${titles.length}]`
+        let hit: any = null
         try {
-            const page = await pica.search(title, 1)
-            const docs = page?.docs || []
-            const hit = pickBest(docs, title)
+            for (const q of queryCandidates(title)) {
+                const page = await pica.search(q, 1)
+                const docs = page?.docs || []
+                hit = pickBest(docs, title)
+                if (hit) break
+                await new Promise((r) => setTimeout(r, 200))
+            }
             if (!hit) {
                 miss++
                 missing.push(title)
@@ -67,7 +108,7 @@ async function main() {
             const meta = {
                 id: hit._id || '',
                 title: hit.title || title,
-                query: title,
+                localName: title,
                 matched: norm(hit.title) === norm(title),
                 author: hit.author || '',
                 categories: hit.categories || [],
@@ -81,6 +122,7 @@ async function main() {
                 updated_at: hit.updated_at || '',
                 created_at: hit.created_at || ''
             }
+            // 文件名按「本地书名」来，本机才能对上号
             const fname = normalizeName(title) + '.json'
             fs.writeFileSync(path.join(outDir, fname), JSON.stringify(meta, null, 2), 'utf8')
             ok++
@@ -88,11 +130,12 @@ async function main() {
             err++
             log.warn(`${tag} 查询失败：${title}（${e?.message || e}）`)
         }
-        // 轻量节流，别把对面打急了
         await new Promise((r) => setTimeout(r, 250))
     }
 
-    log.info(`完成：命中 ${pico.green(String(ok))}，没找到 ${pico.yellow(String(miss))}，出错 ${pico.red(String(err))}`)
+    log.info(
+        `完成：命中 ${pico.green(String(ok))}，没找到 ${pico.yellow(String(miss))}，出错 ${pico.red(String(err))}`
+    )
     if (missing.length > 0 && missing.length <= 40) {
         log.info('没找到的：' + missing.join('、'))
     }
