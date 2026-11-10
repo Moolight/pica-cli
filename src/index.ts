@@ -29,8 +29,17 @@ const keysTip = [
 ]
 const checkboxHelpTip = ` (${keysTip.join(', ')})`
 
-/** 生肉标记：标题/标签/分区里出现这些词就判定为未汉化 */
-const RAW_MARKERS = ['生肉', '日文', '日本語', '日語', '无汉化', '無漢化', 'raw', 'untranslated']
+/**
+ * 生肉标记：只用在「分区 + 标签」上，不再看标题，也不再用 chineseTeam 空值推断。
+ *
+ * 历史教训（2026-11-10）：
+ * 1. 原来有 'raw' 和 'untranslated'，而命中方式是纯子串 includes，
+ *    于是 draw / strawberry / withdrawal 这类词全被误判成生肉 —— 已删。
+ * 2. 原来 chineseTeam 为空就判生肉，但 Cosplay / 写真 / CG 集这类内容
+ *    本来就没有汉化组，导致整类被吃掉 —— 改成显式分区标签判定，
+ *    严格的 chineseTeam 推断挪到可选的 PICA_DL_RAW_STRICT。
+ */
+const RAW_MARKERS = ['生肉', '日文', '日本語', '日語', '无汉化', '無汉化']
 
 /**
  * 繁简归一：哔咔的分区名是繁体（偽娘哲學/CG雜圖/扶他樂園/耽美花園），
@@ -94,28 +103,57 @@ function isWithinHours(updatedAt: string, hours: number): boolean {
     return Date.now() - t <= hours * 3600 * 1000
 }
 
+/**
+ * 用于「排除分区」的字段：只看 categories + tags，不看 title。
+ * 标题里出现「女性向」「生肉」这类词不等于它属于那个分区，
+ * 拿标题做排除会误杀标题恰好含这些词的正常作品。
+ */
+function comicTags(comic: Comic): string {
+    return [...(comic.categories || []), ...(comic.tags || [])].join('|')
+}
+
+/** 完整字段（含标题）：只在「生肉标记」这类宽匹配上用 */
 function comicFields(comic: Comic): string {
-    return [...(comic.categories || []), ...(comic.tags || []), comic.title || ''].join('|')
+    return `${comicTags(comic)}|${comic.title || ''}`
 }
 
 function hitExclude(comic: Comic, exclude: string[]): boolean {
     if (exclude.length === 0) return false
-    return hitsAny(comicFields(comic), exclude)
+    return hitsAny(comicTags(comic), exclude)
 }
 
 /** 只保留命中指定分类的漫画（空数组=不限制） */
 function hitInclude(comic: Comic, include: string[]): boolean {
     if (include.length === 0) return true
-    return hitsAny([...(comic.categories || []), ...(comic.tags || [])].join('|'), include)
+    return hitsAny(comicTags(comic), include)
 }
 
-function isRaw(comic: Comic): boolean {
+function parseFlag(name: string): boolean {
+    const raw = process.env[name]?.trim().toLowerCase()
+    if (!raw) return false
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
+/**
+ * 生肉判定。
+ * 默认宽松：只看 categories/tags/标题里有没有明确的中/日文「生肉」标记。
+ * PICA_DL_RAW_STRICT=true 时额外把「chineseTeam 为空」也算生肉
+ * （会误杀 Cosplay / 写真 / CG 集，默认关闭）。
+ */
+function isRaw(comic: Comic, strict = false): boolean {
     if (hitsAny(comicFields(comic), RAW_MARKERS)) return true
-    // chineseTeam 为空 = 没有汉化组
-    const team = (comic.chineseTeam || '').trim()
-    if (!team) return true
+    if (strict) {
+        const team = (comic.chineseTeam || '').trim()
+        if (!team) return true
+    }
     return false
 }
+
+/**
+ * 被过滤掉的条目。只在 PICA_DL_DEBUG_DROPS=true 时打印，
+ * 用来回答「到底谁被过滤了、因为什么」。
+ */
+type Drop = { title: string; reason: string; tags: string }
 
 /**
  * 全站最新：空 block 的 comics?s=dd 不返回更新流（实测只有 1 条且是旧书），
@@ -127,7 +165,9 @@ async function searchAllBlocks(
     exclude: string[],
     include: string[],
     dropRaw: boolean,
-    limit: number
+    limit: number,
+    strictRaw = false,
+    drops: Drop[] = []
 ): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number; stale: number }> {
     const kept: Comic[] = []
     const seen = new Set<string>()
@@ -181,13 +221,22 @@ async function searchAllBlocks(
             }
             if (hitExclude(c, exclude)) {
                 droppedCat++
+                drops.push({ title: c.title, reason: `分区/标签命中 ${exclude.join(',')}`, tags: comicTags(c) })
                 continue
             }
-            if (dropRaw && isRaw(c)) {
+            if (dropRaw && isRaw(c, strictRaw)) {
                 droppedRaw++
+                drops.push({
+                    title: c.title,
+                    reason: strictRaw ? '生肉（严格：含无汉化组）' : '生肉标记',
+                    tags: comicTags(c)
+                })
                 continue
             }
-            if (!hitInclude(c, include)) continue
+            if (!hitInclude(c, include)) {
+                drops.push({ title: c.title, reason: `未命中分类 ${include.join(',')}`, tags: comicTags(c) })
+                continue
+            }
             kept.push(c)
         }
     }
@@ -208,7 +257,9 @@ async function searchBlock(
     exclude: string[],
     include: string[],
     dropRaw: boolean,
-    limit: number
+    limit: number,
+    strictRaw = false,
+    drops: Drop[] = []
 ): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number; stale: number }> {
     const kept: Comic[] = []
     let droppedRaw = 0
@@ -243,13 +294,22 @@ async function searchBlock(
             }
             if (hitExclude(c, exclude)) {
                 droppedCat++
+                drops.push({ title: c.title, reason: `分区/标签命中 ${exclude.join(',')}`, tags: comicTags(c) })
                 continue
             }
-            if (dropRaw && isRaw(c)) {
+            if (dropRaw && isRaw(c, strictRaw)) {
                 droppedRaw++
+                drops.push({
+                    title: c.title,
+                    reason: strictRaw ? '生肉（严格：含无汉化组）' : '生肉标记',
+                    tags: comicTags(c)
+                })
                 continue
             }
-            if (!hitInclude(c, include)) continue
+            if (!hitInclude(c, include)) {
+                drops.push({ title: c.title, reason: `未命中分类 ${include.join(',')}`, tags: comicTags(c) })
+                continue
+            }
             kept.push(c)
             if (limit > 0 && kept.length >= limit) break outer
         }
@@ -271,7 +331,9 @@ async function searchRecent(
     exclude: string[],
     include: string[],
     dropRaw: boolean,
-    limit: number
+    limit: number,
+    strictRaw = false,
+    drops: Drop[] = []
 ): Promise<{ kept: Comic[]; droppedRaw: number; droppedCat: number; scanned: number }> {
     const kept: Comic[] = []
     let droppedRaw = 0
@@ -288,13 +350,22 @@ async function searchRecent(
             scanned++
             if (hitExclude(c, exclude)) {
                 droppedCat++
+                drops.push({ title: c.title, reason: `分区/标签命中 ${exclude.join(',')}`, tags: comicTags(c) })
                 continue
             }
-            if (dropRaw && isRaw(c)) {
+            if (dropRaw && isRaw(c, strictRaw)) {
                 droppedRaw++
+                drops.push({
+                    title: c.title,
+                    reason: strictRaw ? '生肉（严格：含无汉化组）' : '生肉标记',
+                    tags: comicTags(c)
+                })
                 continue
             }
-            if (!hitInclude(c, include)) continue
+            if (!hitInclude(c, include)) {
+                drops.push({ title: c.title, reason: `未命中分类 ${include.join(',')}`, tags: comicTags(c) })
+                continue
+            }
             kept.push(c)
         }
         if (hours !== null && freshOnPage === 0) break
@@ -353,6 +424,9 @@ async function main() {
     const limit = parseLimit()
     const block = parseBlock()
     const dropRaw = process.env.PICA_DL_DROP_RAW !== 'false'
+    const strictRaw = parseFlag('PICA_DL_RAW_STRICT')
+    const debugDrops = parseFlag('PICA_DL_DEBUG_DROPS')
+    const drops: Drop[] = []
 
     const account =
         PICA_ACCOUNT ||
@@ -444,7 +518,9 @@ async function main() {
                   excludeCategories,
                   includeCategories,
                   dropRaw,
-                  limit
+                  limit,
+                  strictRaw,
+                  drops
               )
             : await searchAllBlocks(
                   pica,
@@ -452,7 +528,9 @@ async function main() {
                   excludeCategories,
                   includeCategories,
                   dropRaw,
-                  limit
+                  limit,
+                  strictRaw,
+                  drops
               )
         spinner.stop()
         for (const c of r.kept) {
@@ -525,7 +603,9 @@ async function main() {
                     excludeCategories,
                     includeCategories,
                     dropRaw,
-                    limit > 0 ? limit - comics.length : 0
+                    limit > 0 ? limit - comics.length : 0,
+                    strictRaw,
+                    drops
                 )
                 spinner.stop()
                 let added = 0
@@ -578,7 +658,11 @@ async function main() {
     let pool = comics
     if (dropRaw) {
         const before = pool.length
-        pool = pool.filter((c) => !isRaw(c))
+        pool = pool.filter((c) => {
+            const raw = isRaw(c, strictRaw)
+            if (raw) drops.push({ title: c.title, reason: strictRaw ? '生肉（严格：含无汉化组）' : '生肉标记', tags: comicTags(c) })
+            return !raw
+        })
         if (before !== pool.length) {
             log.info(`生肉过滤：剔除 ${pico.cyan(before - pool.length)} 本`)
         }
@@ -609,6 +693,17 @@ async function main() {
         if (pool.length > limit) {
             log.info(`数量截断：保留最新 ${pico.cyan(limit)} 部`)
             pool = pool.slice(0, limit)
+        }
+    }
+
+    if (debugDrops && drops.length > 0) {
+        const shown = drops.slice(0, 40)
+        log.info(`被过滤明细（共 ${drops.length} 条，显示前 ${shown.length} 条）：`)
+        for (const d of shown) {
+            log.info(`  - [${d.reason}] ${d.title}  「${d.tags}」`)
+        }
+        if (drops.length > shown.length) {
+            log.info(`  ... 还有 ${drops.length - shown.length} 条未显示`)
         }
     }
 
