@@ -137,3 +137,32 @@ export const log = {
 export function sleep(s: number) {
     return new Promise((r) => setTimeout(r, s * 1000))
 }
+
+/**
+ * 把漫画元信息写到 comics/<书名>/_meta.json
+ * 本地库只存图片，分类/标签/作者这些得靠它带下来
+ */
+export function writeMeta(comic: any) {
+    const dir = resolvePath('comics', normalizeName(String(comic.title || '').trim()))
+    fs.mkdirSync(dir, { recursive: true })
+    const meta = {
+        id: comic._id || '',
+        title: comic.title || '',
+        author: comic.author || '',
+        categories: comic.categories || [],
+        tags: comic.tags || [],
+        description: comic.description || '',
+        chineseTeam: comic.chineseTeam || '',
+        finished: !!comic.finished,
+        totalViews: comic.totalViews || 0,
+        totalLikes: comic.totalLikes || 0,
+        pages: comic.pagesCount || 0,
+        updated_at: comic.updated_at || '',
+        created_at: comic.created_at || ''
+    }
+    fs.writeFileSync(
+        path.join(dir, '_meta.json'),
+        JSON.stringify(meta, null, 2),
+        'utf8'
+    )
+}
