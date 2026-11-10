@@ -6,7 +6,8 @@ import {
     filterEpisodes,
     filterPictures,
     isValidComicId,
-    selectChapterByInput
+    selectChapterByInput,
+    writeMeta
 } from './utils'
 import ora from 'ora'
 import Input from '@inquirer/input'
@@ -978,6 +979,7 @@ async function main() {
                 )
             }
         }
+        writeMeta(comic)
     }
 
     log.info(`全部下载完成`)
