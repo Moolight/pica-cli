@@ -27,7 +27,18 @@ function main() {
 
     for (const comic of comics) {
         const comicRoot = path.join(root, comic)
-        const episodes = fs.readdirSync(comicRoot)
+        const episodes = fs.readdirSync(comicRoot).filter((name) => {
+            // _meta.json 是元信息文件，不是章节，别当章节打包
+            return name !== '_meta.json'
+        })
+
+        // 元信息单独放到 <书名>/_meta.json，本机解压时认它
+        const metaSrc = path.join(comicRoot, '_meta.json')
+        if (fs.existsSync(metaSrc)) {
+            const dir = path.join(dest, comic)
+            fs.mkdirSync(dir, { recursive: true })
+            fs.copyFileSync(metaSrc, path.join(dir, '_meta.json'))
+        }
 
         const bar = new ProgressBar(
             `${pico.cyan('➡️')} 打包 ${pico.cyan(comic)} [:bar] :percent`,
