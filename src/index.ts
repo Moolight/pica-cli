@@ -185,11 +185,11 @@ type Drop = { title: string; reason: string; tags: string }
  * 只看第一页的话，120 小时窗口会漏掉容量大的分区里的旧一半。
  */
 function pagesForHours(hours: number | null): number {
-    if (hours === null) return 3
-    if (hours <= 24) return 1
-    if (hours <= 72) return 3
-    if (hours <= 168) return 5
-    return 8
+    if (hours === null) return 5
+    if (hours <= 24) return 4
+    if (hours <= 72) return 6
+    if (hours <= 168) return 8
+    return 12
 }
 async function searchAllBlocks(
     pica: Pica,
